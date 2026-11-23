@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Сила Скайвокера</title>
+<!--
+  «Хай буде з тобою Сила, Скайвокер» — сцена (Wizard, переговорна MSG 282, 284, 285, 291, 292; 23.11.2026).
+  Один файл на два варіанти:
+    ?mode=live    — Mini App у Telegram (за замовчуванням): на весь екран, грає раз і закривається сам;
+                    поза Telegram — кнопка «Ще раз».
+    ?mode=record  — для запису в MP4 (record.py): без автопрогравання, кадр малює window.renderAt(t).
+    ?mode=sticker — для відеостікера: прозорий фон, лише фінал (руків'я → лезо), кадр — window.renderAt(t).
+  Персонаж свій, намальований кодом: без кадрів, логотипів і звуку з фільмів.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; }
+  body.sticker { background: transparent; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #replay {
+    position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    display: none; background: rgba(0,0,0,.65); color: #7dff7a; border: 1px solid #2f8f2c; border-radius: 20px;
+    padding: 10px 18px; font: 15px system-ui, sans-serif; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="replay" type="button">⚡ Ще раз</button>
+<script>
+(() => {
+  'use strict';
+  const Q = new URLSearchParams(location.search);
+  const MODE = ['live', 'record', 'sticker'].includes(Q.get('mode')) ? Q.get('mode') : 'live';
+  if (MODE === 'sticker') document.body.classList.add('sticker');
+
+  // ---- таймлайн сцени, секунди ----
+  const T = {
+    figIn: [0.0, 0.8],      // фігура проступає з темряви
+    arm: [0.8, 1.8],        // рука піднімається
+    rainIn: [1.6, 2.4],     // зелений код заливає екран
+    conv: 2.8,              // код стікається в долоню (до ~4.35)
+    hoodA: [2.9, 4.5],      // мерехтіння коду в глибині каптура — перед руків'ям (MSG 292)
+    hilt: 4.35,             // спалах — руків'я в руці горизонтально
+    turn: [4.6, 5.4],       // поворот вертикально
+    blade: [5.4, 6.6],      // повільно виїжджає лезо з кодом усередині
+    hoodB: [6.6, 7.7],      // знову код у каптурі — коли лезо вийшло повністю (MSG 292)
+    out: [7.6, 8.2],        // гасне
+  };
+  const DUR = 8.2;
+  const STICKER_FROM = 4.35, STICKER_DUR = 2.9;
+
+  // ---- утиліти ----
+  const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const seg = (t, a, b) => clamp((t - a) / (b - a));
+  const easeIO = k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+  const easeOut = k => 1 - Math.pow(1 - k, 3);
+  function hash(a, b, c) {
+    let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263) ^ Math.imul(c | 0, 1274126177);
+    h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  }
+  const GL = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン0123456789Z:=*+<>';
+  const CODE = 'if(force){jedi.use()} 0101 return lux; run() 01 <=> skw.on() 1010 while(light) => {} ';
+  const FONT = '"MS Gothic","Noto Sans JP","Hiragino Kaku Gothic ProN",monospace';
+
+  // ---- полотно ----
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  let W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = MODE === 'live' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // Віртуальна сцена 720×1280; у стікері — кадр по верхній частині фігури з мечем.
+  const VIEW = MODE === 'sticker' ? { x: 90, y: 70, w: 700, h: 700 } : { x: 0, y: 0, w: 720, h: 1280 };
+  function viewXf() {
+    const s = Math.min(W / VIEW.w, H / VIEW.h);
+    return { s, ox: (W - VIEW.w * s) / 2 - VIEW.x * s, oy: (H - VIEW.h * s) / 2 - VIEW.y * s };
+  }
+
+  // ---- геометрія фігури (віртуальні координати) ----
+  const CX = 330;
+  const SHOULDER = { x: 460, y: 760 };
+  const ARM_REST = { a: Math.atan2(240, 45), l: 244 };
+  const ARM_UP = { a: Math.atan2(-150, 130), l: 198 };
+  function armAt(t) {
+    const k = easeIO(seg(t, ...T.arm));
+    const a = lerp(ARM_REST.a, ARM_UP.a, k), l = lerp(ARM_REST.l, ARM_UP.l, k);
+    const dx = Math.cos(a), dy = Math.sin(a);
+    const wrist = { x: SHOULDER.x + dx * l, y: SHOULDER.y + dy * l };
+    return { k, a, dx, dy, wrist, hand: { x: wrist.x + dx * 24, y: wrist.y + dy * 24 } };
+  }
+
+  // ---- фон: ніч, зорі ----
+  function drawBackground() {
+    const g = ctx.createRadialGradient(W * .5, H * .45, 0, W * .5, H * .45, Math.max(W, H) * .8);
+    g.addColorStop(0, '#0d1418'); g.addColorStop(1, '#010203');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    for (let i = 0; i < 140; i++) {
+      const x = hash(i, 11, 0) * W, y = hash(i, 12, 0) * H * .8, r = .4 + hash(i, 13, 0) * 1.1;
+      ctx.globalAlpha = .25 + hash(i, 14, 0) * .55;
+      ctx.fillStyle = '#cfe8ff';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---- код у глибині каптура (MSG 292) ----
+  function hoodCode(t, k) {
+    if (k <= 0) return;
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(CX, 640, 44, 58, 0, 0, Math.PI * 2); ctx.clip();
+    const fs = 7, cols = 14;
+    ctx.font = `${fs}px ${FONT}`; ctx.textAlign = 'center';
+    const flick = .55 + .45 * hash(Math.floor(t * 18), 3, 9);
+    for (let c = 0; c < cols; c++) {
+      const x = CX - 44 + (c + .5) * (88 / cols);
+      const sp = 40 + hash(c, 31, 0) * 70;
+      const head = 580 + ((hash(c, 32, 0) * 140 + sp * t) % 140);
+      for (let j = 0; j < 9; j++) {
+        const y = Math.floor(head / fs) * fs - j * fs;
+        const ch = GL[Math.floor(hash(c, y, Math.floor(t * 10)) * GL.length)];
+        // глибоко: до країв і вгору (під каптуром) — тьмяніше
+        const depth = 1 - Math.min(1, Math.hypot((x - CX) / 44, (y - 645) / 58));
+        ctx.globalAlpha = k * flick * (1 - j / 9) * (.25 + .75 * depth);
+        ctx.fillStyle = j === 0 ? '#c8ffc8' : '#16d63c';
+        ctx.fillText(ch, x, y);
+      }
+    }
+    ctx.restore();
+  }
+
+  // ---- фігура в плащі з каптуром, обличчя — темрява ----
+  function drawFigure(t, arm, light) {
+    // плащ
+    ctx.beginPath();
+    ctx.moveTo(CX - 165, 745);
+    ctx.bezierCurveTo(CX - 210, 900, CX - 250, 1100, CX - 265, 1290);
+    ctx.lineTo(CX + 265, 1290);
+    ctx.bezierCurveTo(CX + 250, 1100, CX + 215, 900, CX + 165, 745);
+    ctx.bezierCurveTo(CX + 120, 715, CX - 120, 715, CX - 165, 745);
+    const rg = ctx.createLinearGradient(0, 720, 0, 1280);
+    rg.addColorStop(0, '#33241a'); rg.addColorStop(1, '#17100b');
+    ctx.fillStyle = rg; ctx.fill();
+    // складки
+    ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 6;
+    for (const [x0, x1] of [[CX - 70, CX - 120], [CX + 10, CX + 5], [CX + 80, CX + 130]]) {
+      ctx.beginPath(); ctx.moveTo(x0, 800); ctx.quadraticCurveTo((x0 + x1) / 2 + 12, 1040, x1, 1280); ctx.stroke();
+    }
+    // каптур
+    ctx.beginPath();
+    ctx.moveTo(CX - 100, 735);
+    ctx.bezierCurveTo(CX - 125, 610, CX - 60, 515, CX + 6, 505);
+    ctx.bezierCurveTo(CX + 70, 515, CX + 128, 610, CX + 100, 735);
+    ctx.bezierCurveTo(CX + 50, 760, CX - 50, 760, CX - 100, 735);
+    const hg = ctx.createLinearGradient(CX - 100, 0, CX + 100, 0);
+    hg.addColorStop(0, '#1f150e'); hg.addColorStop(.6, '#3a291d'); hg.addColorStop(1, '#22170f');
+    ctx.fillStyle = hg; ctx.fill();
+    // темрява замість обличчя
+    const fg = ctx.createRadialGradient(CX, 650, 4, CX, 640, 62);
+    fg.addColorStop(0, '#000'); fg.addColorStop(.75, '#020101'); fg.addColorStop(1, 'rgba(20,12,8,.9)');
+    ctx.fillStyle = fg;
+    ctx.beginPath(); ctx.ellipse(CX, 640, 47, 61, 0, 0, Math.PI * 2); ctx.fill();
+    hoodCode(t, Math.max(
+      seg(t, T.hoodA[0], T.hoodA[0] + .4) * (1 - seg(t, T.hoodA[1] - .3, T.hoodA[1])),
+      seg(t, T.hoodB[0], T.hoodB[0] + .3) * (1 - seg(t, T.hoodB[1] - .3, T.hoodB[1]))));
+
+    // рукав (дзвоном до зап'ястя)
+    const { dx, dy, wrist } = arm;
+    const px = -dy, py = dx;
+    ctx.beginPath();
+    ctx.moveTo(SHOULDER.x + px * 36, SHOULDER.y + py * 36);
+    ctx.lineTo(wrist.x + px * 44, wrist.y + py * 44);
+    ctx.lineTo(wrist.x - px * 44, wrist.y - py * 44);
+    ctx.lineTo(SHOULDER.x - px * 36, SHOULDER.y - py * 36);
+    ctx.closePath();
+    ctx.fillStyle = '#2c1f16'; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(wrist.x + px * 44, wrist.y + py * 44); ctx.lineTo(wrist.x - px * 44, wrist.y - py * 44); ctx.stroke();
+
+    // зелене підсвічування країв від леза / коду в долоні
+    if (light > 0) {
+      ctx.save();
+      ctx.globalAlpha = light * .55; ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2.5;
+      ctx.shadowColor = '#39ff14'; ctx.shadowBlur = 12;
+      ctx.beginPath(); ctx.moveTo(CX + 100, 735); ctx.bezierCurveTo(CX + 128, 610, CX + 70, 515, CX + 6, 505); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(SHOULDER.x - px * 36, SHOULDER.y - py * 36); ctx.lineTo(wrist.x - px * 44, wrist.y - py * 44); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // ---- долоня: відкрита (Сила) або кулак (тримає руків'я) ----
+  function drawHand(arm, open) {
+    const { hand, a } = arm;
+    ctx.save(); ctx.translate(hand.x, hand.y); ctx.rotate(a);
+    ctx.fillStyle = '#121212'; ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 2;
+    if (open) {
+      ctx.beginPath(); ctx.ellipse(0, 0, 20, 17, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.lineCap = 'round'; ctx.lineWidth = 8; ctx.strokeStyle = '#121212';
+      for (const f of [-.55, -.18, .18, .52]) {
+        ctx.beginPath(); ctx.moveTo(14 * Math.cos(f), 14 * Math.sin(f)); ctx.lineTo(34 * Math.cos(f * 1.25), 34 * Math.sin(f * 1.25)); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.moveTo(0, -12); ctx.lineTo(12, -30); ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.ellipse(-2, 0, 19, 21, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // ---- руків'я (локально: вісь X — від навершя до емітера; рука на руків'ї в x=0) ----
+  const HS = 1.7;                                   // масштаб руків'я
+  function drawHilt() {
+    ctx.save(); ctx.scale(HS, HS);
+    const m = ctx.createLinearGradient(0, -9, 0, 9);
+    m.addColorStop(0, '#5d6268'); m.addColorStop(.35, '#e1e6ea'); m.addColorStop(.6, '#9aa1a8'); m.addColorStop(1, '#3b3f44');
+    ctx.fillStyle = '#1b1b1b'; ctx.fillRect(-36, -8, 8, 16);                 // навершя
+    ctx.fillStyle = m; ctx.fillRect(-28, -7, 44, 14);                         // тіло
+    ctx.fillStyle = '#111';
+    for (let x = -24; x < 12; x += 6) ctx.fillRect(x, -7.5, 3, 15);          // ребра руків'я
+    ctx.fillStyle = m; ctx.fillRect(16, -7.5, 30, 15);                        // корпус
+    ctx.fillStyle = '#b00'; ctx.fillRect(28, -9, 5, 3);                       // кнопка
+    ctx.fillStyle = m; ctx.fillRect(46, -10, 16, 20);                         // емітер
+    ctx.fillStyle = '#222'; ctx.fillRect(58, -8, 4, 16);
+    ctx.restore();
+  }
+
+  // ---- лезо з кодом усередині ----
+  function drawBlade(t, len) {
+    if (len <= 0) return;
+    const x0 = 62 * HS, x1 = x0 + len;
+    const flick = .93 + .07 * hash(Math.floor(t * 30), 5, 5);
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const [w, al, col] of [[64, .08, '#1aff3c'], [38, .18, '#22ff3a'], [22, .9 * flick, '#39ff14']]) {
+      ctx.globalAlpha = al; ctx.strokeStyle = col; ctx.lineWidth = w;
+      ctx.shadowColor = '#39ff14'; ctx.shadowBlur = w === 22 ? 24 : 0;
+      ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    // світле осердя
+    ctx.globalAlpha = 1; ctx.strokeStyle = '#c9ffc2'; ctx.lineWidth = 14;
+    ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
+    // усередині біжать дрібні рядки коду (MSG 282)
+    ctx.beginPath(); ctx.rect(x0, -7, len, 14); ctx.clip();
+    ctx.font = `bold 5px ${FONT}`; ctx.textBaseline = 'middle';
+    const lanes = [-4.5, 0, 4.5];
+    lanes.forEach((y, i) => {
+      const sp = 90 + i * 35;
+      const step = CODE.length * 3.1;
+      const off = ((t * sp + i * 57) % step);
+      ctx.globalAlpha = .9; ctx.fillStyle = i === 1 ? '#0a8f22' : '#10a82c';
+      for (let x = x0 - step + off; x < x1; x += step) ctx.fillText(CODE, x, y);
+    });
+    ctx.restore();
+    // кінчик
+    ctx.save(); ctx.globalAlpha = .9; ctx.fillStyle = '#e8ffe4';
+    ctx.beginPath(); ctx.arc(x1, 0, 6, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  }
+
+  // ---- зелений код «як у Матриці» на весь екран + стікання в долоню ----
+  function drawRain(t, handS) {
+    const cover = seg(t, ...T.rainIn);
+    if (cover <= 0 || t > T.conv + 1.7) return;
+    const fs = Math.max(12, Math.round(Math.min(W, H) / 42));
+    const cols = Math.ceil(W / fs);
+    const maxD = Math.hypot(Math.max(handS.x, W - handS.x), Math.max(handS.y, H - handS.y));
+    ctx.font = `${fs}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    for (let c = 0; c < cols; c++) {
+      if (hash(c, 5, 0) > cover * 1.05) continue;
+      const sp = (.55 + hash(c, 1, 0) * .9) * H;
+      const head = ((hash(c, 2, 0) * 1.6 * H + sp * (t - T.rainIn[0])) % (H * 1.6)) - .2 * H;
+      const L = 12 + Math.floor(hash(c, 3, 0) * 20);
+      const x = c * fs + fs / 2;
+      for (let j = 0; j < L; j++) {
+        const row = Math.floor(head / fs) - j;
+        const y = row * fs;
+        if (y < -fs || y > H + fs) continue;
+        const ch = GL[Math.floor(hash(c, row, Math.floor(t * 9 + hash(c, 4, 0) * 9)) * GL.length)];
+        const d = .8 * Math.hypot(x - handS.x, y - handS.y) / maxD + .25 * hash(c, j, 7);
+        const k = Math.pow(seg(t, T.conv + d, T.conv + d + .55), 2);
+        if (k >= 1) continue;
+        const px = lerp(x, handS.x, k), py = lerp(y, handS.y, k);
+        ctx.globalAlpha = (j === 0 ? 1 : (1 - j / L) * .9) * (1 - k * .4);
+        ctx.fillStyle = j === 0 ? '#e2ffe2' : '#00ff41';
+        if (k > 0) {
+          const s = 1 - .7 * k;
+          ctx.save(); ctx.translate(px, py); ctx.scale(s, s); ctx.fillText(ch, 0, 0); ctx.restore();
+        } else ctx.fillText(ch, px, py);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---- кадр ----
+  function draw(t) {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const sticker = MODE === 'sticker';
+    if (sticker) t = STICKER_FROM + clamp(t, 0, STICKER_DUR);
+    if (!sticker) drawBackground();
+
+    const xf = viewXf();
+    const arm = armAt(t);
+    const handS = { x: xf.ox + arm.hand.x * xf.s, y: xf.oy + arm.hand.y * xf.s };
+
+    const turnK = easeIO(seg(t, ...T.turn));
+    const bladeK = easeOut(seg(t, ...T.blade));
+    const gather = seg(t, T.conv + .1, T.hilt) * (1 - seg(t, T.hilt, T.hilt + .6));  // код набирається в долоні, після появи руків'я гасне
+    const flash = seg(t, T.hilt - .05, T.hilt + .1) * (1 - seg(t, T.hilt + .1, T.hilt + .5));
+    const light = Math.max(seg(t, T.conv + .1, T.hilt) * .6 * (1 - turnK), bladeK);
+
+    // сцена (у віртуальних координатах)
+    ctx.save(); ctx.setTransform(DPR * xf.s, 0, 0, DPR * xf.s, DPR * xf.ox, DPR * xf.oy);
+    drawFigure(t, arm, light);
+    const hasHilt = t >= T.hilt;
+    if (hasHilt) {
+      ctx.save(); ctx.translate(arm.hand.x, arm.hand.y); ctx.rotate(lerp(0, -Math.PI / 2, turnK));
+      drawBlade(t, 400 * bladeK);
+      drawHilt();
+      ctx.restore();
+    }
+    drawHand(arm, !hasHilt);
+    ctx.restore();
+
+    // зелене світло від леза на всю сцену
+    if (bladeK > 0) {
+      const bx = handS.x, by = handS.y - 200 * xf.s * bladeK;
+      const g = ctx.createRadialGradient(bx, by, 0, bx, by, 520 * xf.s);
+      g.addColorStop(0, `rgba(57,255,20,${.22 * bladeK})`); g.addColorStop(1, 'rgba(57,255,20,0)');
+      ctx.save(); ctx.globalCompositeOperation = sticker ? 'source-atop' : 'lighter';
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore();
+    }
+
+    if (!sticker) {
+      // екран тоне в коді: сцена темніє під дощем коду і повертається після стікання
+      const cover = seg(t, ...T.rainIn) * (1 - seg(t, T.conv + .9, T.hilt));
+      if (cover > 0) { ctx.globalAlpha = .88 * cover; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+      drawRain(t, handS);
+    }
+
+    // сяйво коду в долоні + спалах появи руків'я
+    const glow = Math.max(gather * .8, flash);
+    if (glow > 0) {
+      const r = (30 + 90 * flash + 25 * gather) * xf.s;
+      const g = ctx.createRadialGradient(handS.x, handS.y, 0, handS.x, handS.y, r);
+      g.addColorStop(0, `rgba(220,255,220,${glow})`); g.addColorStop(.4, `rgba(57,255,20,${.7 * glow})`); g.addColorStop(1, 'rgba(57,255,20,0)');
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = g;
+      ctx.fillRect(handS.x - r, handS.y - r, 2 * r, 2 * r); ctx.restore();
+    }
+
+    if (!sticker) {
+      const dark = Math.max(1 - seg(t, ...T.figIn), seg(t, ...T.out));
+      if (dark > 0) { ctx.globalAlpha = dark; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+    }
+  }
+
+  // ---- режими ----
+  window.SCENE = { duration: MODE === 'sticker' ? STICKER_DUR : DUR, mode: MODE };
+  window.renderAt = t => { draw(t); return true; };
+  if (MODE !== 'live') return;
+
+  const btn = document.getElementById('replay');
+  let tg = null;
+  function play() {
+    btn.style.display = 'none';
+    const t0 = performance.now();
+    (function frame(now) {
+      const t = (now - t0) / 1000;
+      draw(Math.min(t, DUR));
+      if (t < DUR) requestAnimationFrame(frame);
+      else if (tg && tg.initData) setTimeout(() => tg.close(), 300);   // у Telegram — закриваємось самі
+      else btn.style.display = 'block';
+    })(t0);
+  }
+  btn.addEventListener('click', play);
+
+  const s = document.createElement('script');
+  s.src = 'https://telegram.org/js/telegram-web-app.js';
+  s.onload = s.onerror = () => {
+    tg = window.Telegram && window.Telegram.WebApp;
+    if (tg) {
+      try { tg.ready(); tg.expand(); } catch (e) {}
+      try { tg.setHeaderColor('#000000'); tg.setBackgroundColor('#000000'); } catch (e) {}
+      try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
+      try { if (tg.requestFullscreen && tg.isVersionAtLeast && tg.isVersionAtLeast('8.0')) tg.requestFullscreen(); } catch (e) {}
+    }
+    setTimeout(play, 250);
+  };
+  document.head.appendChild(s);
+})();
+</script>
+</body>
+</html>
