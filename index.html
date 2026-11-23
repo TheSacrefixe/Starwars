@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Сила Скайвокера</title>
 <!--
-  «Хай буде з тобою Сила, Скайвокер» — сцена (Wizard, переговорна MSG 282, 284, 285, 291, 292; 23.11.2026).
+  «Хай буде з тобою Сила, Скайвокер» — сцена v0.2 (Wizard, переговорна MSG 282, 284, 285, 291, 292; 23.11.2026).
+  v0.2 — правки круга 1 (Жорик і Недовірливий): прозорий стікер, помітний код у каптурі, кисть із пальцями,
+  об'єм плаща, контрове світло від меча, запасний старт без telegram-web-app.js, prefers-reduced-motion.
   Один файл на два варіанти:
     ?mode=live    — Mini App у Telegram (за замовчуванням): на весь екран, грає раз і закривається сам;
                     поза Telegram — кнопка «Ще раз».
@@ -15,7 +17,7 @@
 -->
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; }
-  body.sticker { background: transparent; }
+  html.sticker, html.sticker body { background: transparent; }
   canvas { display: block; width: 100vw; height: 100vh; }
   #replay {
     position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%);
@@ -32,7 +34,7 @@
   'use strict';
   const Q = new URLSearchParams(location.search);
   const MODE = ['live', 'record', 'sticker'].includes(Q.get('mode')) ? Q.get('mode') : 'live';
-  if (MODE === 'sticker') document.body.classList.add('sticker');
+  if (MODE === 'sticker') document.documentElement.classList.add('sticker');   // прозорий і html, і body
 
   // ---- таймлайн сцени, секунди ----
   const T = {
@@ -40,7 +42,7 @@
     arm: [0.8, 1.8],        // рука піднімається
     rainIn: [1.6, 2.4],     // зелений код заливає екран
     conv: 2.8,              // код стікається в долоню (до ~4.35)
-    hoodA: [2.9, 4.5],      // мерехтіння коду в глибині каптура — перед руків'ям (MSG 292)
+    hoodA: [2.6, 4.5],      // код у глибині каптура — перед руків'ям (MSG 292)
     hilt: 4.35,             // спалах — руків'я в руці горизонтально
     turn: [4.6, 5.4],       // поворот вертикально
     blade: [5.4, 6.6],      // повільно виїжджає лезо з кодом усередині
@@ -64,6 +66,7 @@
   const GL = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン0123456789Z:=*+<>';
   const CODE = 'if(force){jedi.use()} 0101 return lux; run() 01 <=> skw.on() 1010 while(light) => {} ';
   const FONT = '"MS Gothic","Noto Sans JP","Hiragino Kaku Gothic ProN",monospace';
+  const GREEN = '#39ff14';
 
   // ---- полотно ----
   const cv = document.getElementById('c');
@@ -77,8 +80,8 @@
   resize();
   window.addEventListener('resize', resize);
 
-  // Віртуальна сцена 720×1280; у стікері — кадр по верхній частині фігури з мечем.
-  const VIEW = MODE === 'sticker' ? { x: 90, y: 70, w: 700, h: 700 } : { x: 0, y: 0, w: 720, h: 1280 };
+  // Віртуальна сцена 720×1280; у стікері — верх фігури з мечем, низ плавно зникає.
+  const VIEW = MODE === 'sticker' ? { x: 60, y: 60, w: 760, h: 760 } : { x: 0, y: 0, w: 720, h: 1280 };
   function viewXf() {
     const s = Math.min(W / VIEW.w, H / VIEW.h);
     return { s, ox: (W - VIEW.w * s) / 2 - VIEW.x * s, oy: (H - VIEW.h * s) / 2 - VIEW.y * s };
@@ -86,21 +89,21 @@
 
   // ---- геометрія фігури (віртуальні координати) ----
   const CX = 330;
-  const SHOULDER = { x: 460, y: 760 };
-  const ARM_REST = { a: Math.atan2(240, 45), l: 244 };
-  const ARM_UP = { a: Math.atan2(-150, 130), l: 198 };
+  const SHOULDER = { x: 462, y: 770 };
+  const ARM_REST = { a: Math.atan2(240, 40), l: 240 };
+  const ARM_UP = { a: Math.atan2(-160, 120), l: 196 };
   function armAt(t) {
     const k = easeIO(seg(t, ...T.arm));
     const a = lerp(ARM_REST.a, ARM_UP.a, k), l = lerp(ARM_REST.l, ARM_UP.l, k);
     const dx = Math.cos(a), dy = Math.sin(a);
     const wrist = { x: SHOULDER.x + dx * l, y: SHOULDER.y + dy * l };
-    return { k, a, dx, dy, wrist, hand: { x: wrist.x + dx * 24, y: wrist.y + dy * 24 } };
+    return { k, a, dx, dy, wrist, hand: { x: wrist.x + dx * 30, y: wrist.y + dy * 30 } };
   }
 
-  // ---- фон: ніч, зорі ----
-  function drawBackground() {
+  // ---- фон: ніч, зорі, холодний серпанок за фігурою (щоб силует читався) ----
+  function drawBackground(xf) {
     const g = ctx.createRadialGradient(W * .5, H * .45, 0, W * .5, H * .45, Math.max(W, H) * .8);
-    g.addColorStop(0, '#0d1418'); g.addColorStop(1, '#010203');
+    g.addColorStop(0, '#111c22'); g.addColorStop(1, '#010203');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
     for (let i = 0; i < 140; i++) {
       const x = hash(i, 11, 0) * W, y = hash(i, 12, 0) * H * .8, r = .4 + hash(i, 13, 0) * 1.1;
@@ -109,116 +112,184 @@
       ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1;
+    const hx = xf.ox + CX * xf.s, hy = xf.oy + 760 * xf.s;
+    const haze = ctx.createRadialGradient(hx, hy, 0, hx, hy, 430 * xf.s);
+    haze.addColorStop(0, 'rgba(120,150,170,.22)'); haze.addColorStop(1, 'rgba(120,150,170,0)');
+    ctx.fillStyle = haze; ctx.fillRect(0, 0, W, H);
   }
 
-  // ---- код у глибині каптура (MSG 292) ----
+  // ---- код у глибині каптура (MSG 292): малюється ПОВЕРХ затемнення, тому помітний ----
   function hoodCode(t, k) {
     if (k <= 0) return;
     ctx.save();
-    ctx.beginPath(); ctx.ellipse(CX, 640, 44, 58, 0, 0, Math.PI * 2); ctx.clip();
-    const fs = 7, cols = 14;
+    ctx.beginPath(); ctx.ellipse(CX, 642, 46, 60, 0, 0, Math.PI * 2); ctx.clip();
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(CX - 50, 580, 100, 125);   // глибина
+    const fs = 9, cols = 10;
     ctx.font = `${fs}px ${FONT}`; ctx.textAlign = 'center';
-    const flick = .55 + .45 * hash(Math.floor(t * 18), 3, 9);
+    const flick = .7 + .3 * hash(Math.floor(t * 16), 3, 9);
     for (let c = 0; c < cols; c++) {
-      const x = CX - 44 + (c + .5) * (88 / cols);
-      const sp = 40 + hash(c, 31, 0) * 70;
-      const head = 580 + ((hash(c, 32, 0) * 140 + sp * t) % 140);
-      for (let j = 0; j < 9; j++) {
+      const x = CX - 46 + (c + .5) * (92 / cols);
+      const sp = 45 + hash(c, 31, 0) * 75;
+      const head = 585 + ((hash(c, 32, 0) * 130 + sp * t) % 130);
+      for (let j = 0; j < 8; j++) {
         const y = Math.floor(head / fs) * fs - j * fs;
         const ch = GL[Math.floor(hash(c, y, Math.floor(t * 10)) * GL.length)];
-        // глибоко: до країв і вгору (під каптуром) — тьмяніше
-        const depth = 1 - Math.min(1, Math.hypot((x - CX) / 44, (y - 645) / 58));
-        ctx.globalAlpha = k * flick * (1 - j / 9) * (.25 + .75 * depth);
-        ctx.fillStyle = j === 0 ? '#c8ffc8' : '#16d63c';
+        const depth = 1 - Math.min(1, Math.hypot((x - CX) / 46, (y - 648) / 60));   // до країв — глибше й тьмяніше
+        ctx.globalAlpha = k * flick * (1 - j / 8) * (.35 + .65 * depth);
+        ctx.fillStyle = j === 0 ? '#d8ffd8' : '#2dff5a';
         ctx.fillText(ch, x, y);
       }
     }
     ctx.restore();
+    ctx.save();                                                    // ледь помітне світіння з каптура
+    const g = ctx.createRadialGradient(CX, 650, 0, CX, 650, 80);
+    g.addColorStop(0, `rgba(57,255,20,${.18 * k})`); g.addColorStop(1, 'rgba(57,255,20,0)');
+    ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = g; ctx.fillRect(CX - 80, 570, 160, 160);
+    ctx.restore();
   }
+  const hoodK = t => Math.max(
+    seg(t, T.hoodA[0], T.hoodA[0] + .3) * (1 - seg(t, T.hoodA[1] - .3, T.hoodA[1])),
+    seg(t, T.hoodB[0], T.hoodB[0] + .3) * (1 - seg(t, T.hoodB[1] - .3, T.hoodB[1])));
 
-  // ---- фігура в плащі з каптуром, обличчя — темрява ----
-  function drawFigure(t, arm, light) {
-    // плащ
+  // ---- плащ із каптуром: об'єм, складки, туніка й пояс; обличчя — темрява ----
+  function cloakPath() {
     ctx.beginPath();
-    ctx.moveTo(CX - 165, 745);
-    ctx.bezierCurveTo(CX - 210, 900, CX - 250, 1100, CX - 265, 1290);
-    ctx.lineTo(CX + 265, 1290);
-    ctx.bezierCurveTo(CX + 250, 1100, CX + 215, 900, CX + 165, 745);
-    ctx.bezierCurveTo(CX + 120, 715, CX - 120, 715, CX - 165, 745);
-    const rg = ctx.createLinearGradient(0, 720, 0, 1280);
-    rg.addColorStop(0, '#33241a'); rg.addColorStop(1, '#17100b');
-    ctx.fillStyle = rg; ctx.fill();
-    // складки
-    ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 6;
-    for (const [x0, x1] of [[CX - 70, CX - 120], [CX + 10, CX + 5], [CX + 80, CX + 130]]) {
-      ctx.beginPath(); ctx.moveTo(x0, 800); ctx.quadraticCurveTo((x0 + x1) / 2 + 12, 1040, x1, 1280); ctx.stroke();
+    ctx.moveTo(CX - 160, 752);
+    ctx.bezierCurveTo(CX - 215, 900, CX - 252, 1100, CX - 270, 1290);
+    ctx.lineTo(CX + 270, 1290);
+    ctx.bezierCurveTo(CX + 252, 1100, CX + 222, 900, CX + 170, 752);
+    ctx.bezierCurveTo(CX + 120, 718, CX - 115, 718, CX - 160, 752);
+  }
+  function hoodPath() {
+    ctx.beginPath();
+    ctx.moveTo(CX - 104, 742);
+    ctx.bezierCurveTo(CX - 132, 612, CX - 62, 512, CX + 6, 500);
+    ctx.bezierCurveTo(CX + 74, 512, CX + 136, 612, CX + 104, 742);
+    ctx.bezierCurveTo(CX + 52, 770, CX - 52, 770, CX - 104, 742);
+  }
+  function drawBody(light) {
+    // плащ: об'ємна заливка (світліший центр, темні боки)
+    cloakPath();
+    const vg = ctx.createLinearGradient(CX - 270, 0, CX + 270, 0);
+    vg.addColorStop(0, '#1a110b'); vg.addColorStop(.35, '#5a4030'); vg.addColorStop(.55, '#4d3627'); vg.addColorStop(1, '#1e140d');
+    ctx.fillStyle = vg; ctx.fill();
+    ctx.save(); cloakPath(); ctx.clip();
+    const dg = ctx.createLinearGradient(0, 740, 0, 1280);
+    dg.addColorStop(0, 'rgba(0,0,0,0)'); dg.addColorStop(1, 'rgba(0,0,0,.45)');
+    ctx.fillStyle = dg; ctx.fillRect(CX - 280, 740, 560, 560);
+    // туніка між полами і пояс
+    ctx.beginPath(); ctx.moveTo(CX - 18, 770); ctx.lineTo(CX + 30, 770); ctx.lineTo(CX + 62, 1290); ctx.lineTo(CX - 38, 1290); ctx.closePath();
+    const tg = ctx.createLinearGradient(CX - 40, 0, CX + 60, 0);
+    tg.addColorStop(0, '#4a3d2c'); tg.addColorStop(.5, '#8a7656'); tg.addColorStop(1, '#4e402e');
+    ctx.fillStyle = tg; ctx.fill();
+    ctx.fillStyle = '#24170f'; ctx.fillRect(CX - 30, 965, 86, 22);
+    ctx.fillStyle = '#6b5a3e'; ctx.fillRect(CX + 4, 968, 18, 16);
+    // поли плаща — краї
+    ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,.55)';
+    ctx.beginPath(); ctx.moveTo(CX - 18, 770); ctx.lineTo(CX - 38, 1290); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(CX + 30, 770); ctx.lineTo(CX + 62, 1290); ctx.stroke();
+    // складки: темна лінія + світлий відблиск поруч
+    for (const [x0, x1, bend] of [[CX - 120, CX - 190, -14], [CX - 70, CX - 110, 10], [CX + 90, CX + 140, 12], [CX + 135, CX + 210, -10]]) {
+      ctx.strokeStyle = 'rgba(0,0,0,.42)'; ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.moveTo(x0, 800); ctx.quadraticCurveTo((x0 + x1) / 2 + bend, 1040, x1, 1290); ctx.stroke();
+      ctx.strokeStyle = 'rgba(160,120,85,.22)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(x0 + 7, 800); ctx.quadraticCurveTo((x0 + x1) / 2 + bend + 7, 1040, x1 + 7, 1290); ctx.stroke();
     }
-    // каптур
-    ctx.beginPath();
-    ctx.moveTo(CX - 100, 735);
-    ctx.bezierCurveTo(CX - 125, 610, CX - 60, 515, CX + 6, 505);
-    ctx.bezierCurveTo(CX + 70, 515, CX + 128, 610, CX + 100, 735);
-    ctx.bezierCurveTo(CX + 50, 760, CX - 50, 760, CX - 100, 735);
-    const hg = ctx.createLinearGradient(CX - 100, 0, CX + 100, 0);
-    hg.addColorStop(0, '#1f150e'); hg.addColorStop(.6, '#3a291d'); hg.addColorStop(1, '#22170f');
+    ctx.restore();
+
+    // каптур з об'ємом і краєм навколо обличчя
+    hoodPath();
+    const hg = ctx.createLinearGradient(CX - 110, 0, CX + 110, 0);
+    hg.addColorStop(0, '#20160e'); hg.addColorStop(.45, '#5c4231'); hg.addColorStop(.7, '#46321f'); hg.addColorStop(1, '#1f150d');
     ctx.fillStyle = hg; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(CX + 6, 504); ctx.quadraticCurveTo(CX - 10, 560, CX - 2, 585); ctx.stroke();   // шов каптура
+    ctx.strokeStyle = '#6e5038'; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.ellipse(CX, 642, 50, 64, 0, 0, Math.PI * 2); ctx.stroke();                            // край каптура
     // темрява замість обличчя
-    const fg = ctx.createRadialGradient(CX, 650, 4, CX, 640, 62);
-    fg.addColorStop(0, '#000'); fg.addColorStop(.75, '#020101'); fg.addColorStop(1, 'rgba(20,12,8,.9)');
+    const fg = ctx.createRadialGradient(CX, 652, 4, CX, 642, 62);
+    fg.addColorStop(0, '#000'); fg.addColorStop(.8, '#020101'); fg.addColorStop(1, 'rgba(20,12,8,.95)');
     ctx.fillStyle = fg;
-    ctx.beginPath(); ctx.ellipse(CX, 640, 47, 61, 0, 0, Math.PI * 2); ctx.fill();
-    hoodCode(t, Math.max(
-      seg(t, T.hoodA[0], T.hoodA[0] + .4) * (1 - seg(t, T.hoodA[1] - .3, T.hoodA[1])),
-      seg(t, T.hoodB[0], T.hoodB[0] + .3) * (1 - seg(t, T.hoodB[1] - .3, T.hoodB[1]))));
+    ctx.beginPath(); ctx.ellipse(CX, 642, 47, 61, 0, 0, Math.PI * 2); ctx.fill();
 
-    // рукав (дзвоном до зап'ястя)
-    const { dx, dy, wrist } = arm;
-    const px = -dy, py = dx;
-    ctx.beginPath();
-    ctx.moveTo(SHOULDER.x + px * 36, SHOULDER.y + py * 36);
-    ctx.lineTo(wrist.x + px * 44, wrist.y + py * 44);
-    ctx.lineTo(wrist.x - px * 44, wrist.y - py * 44);
-    ctx.lineTo(SHOULDER.x - px * 36, SHOULDER.y - py * 36);
-    ctx.closePath();
-    ctx.fillStyle = '#2c1f16'; ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.moveTo(wrist.x + px * 44, wrist.y + py * 44); ctx.lineTo(wrist.x - px * 44, wrist.y - py * 44); ctx.stroke();
-
-    // зелене підсвічування країв від леза / коду в долоні
+    // контрове зелене світло від меча/коду — по правому краю каптура й плаща
     if (light > 0) {
       ctx.save();
-      ctx.globalAlpha = light * .55; ctx.strokeStyle = '#39ff14'; ctx.lineWidth = 2.5;
-      ctx.shadowColor = '#39ff14'; ctx.shadowBlur = 12;
-      ctx.beginPath(); ctx.moveTo(CX + 100, 735); ctx.bezierCurveTo(CX + 128, 610, CX + 70, 515, CX + 6, 505); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(SHOULDER.x - px * 36, SHOULDER.y - py * 36); ctx.lineTo(wrist.x - px * 44, wrist.y - py * 44); ctx.stroke();
+      ctx.globalAlpha = Math.min(1, light) * .75; ctx.strokeStyle = GREEN; ctx.lineWidth = 3;
+      ctx.shadowColor = GREEN; ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.moveTo(CX + 104, 742); ctx.bezierCurveTo(CX + 136, 612, CX + 74, 512, CX + 6, 500); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(CX + 170, 752); ctx.bezierCurveTo(CX + 222, 900, CX + 252, 1100, CX + 270, 1290); ctx.stroke();
+      ctx.restore();
+      ctx.save(); cloakPath(); ctx.clip();
+      const rg = ctx.createLinearGradient(CX + 270, 0, CX + 60, 0);
+      rg.addColorStop(0, `rgba(57,255,20,${.28 * light})`); rg.addColorStop(1, 'rgba(57,255,20,0)');
+      ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = rg; ctx.fillRect(CX + 40, 740, 240, 560);
       ctx.restore();
     }
   }
 
-  // ---- долоня: відкрита (Сила) або кулак (тримає руків'я) ----
-  function drawHand(arm, open) {
+  // ---- рукав дзвоном + передпліччя в рукавиці ----
+  function drawSleeve(arm, light) {
+    const { dx, dy, wrist } = arm;
+    const px = -dy, py = dx;
+    const cuff = { x: wrist.x - dx * 18, y: wrist.y - dy * 18 };
+    ctx.beginPath();
+    ctx.moveTo(SHOULDER.x + px * 38, SHOULDER.y + py * 38);
+    ctx.quadraticCurveTo(SHOULDER.x + dx * 110 + px * 50, SHOULDER.y + dy * 110 + py * 50, cuff.x + px * 50, cuff.y + py * 50);
+    ctx.lineTo(cuff.x - px * 46, cuff.y - py * 46);
+    ctx.quadraticCurveTo(SHOULDER.x + dx * 110 - px * 40, SHOULDER.y + dy * 110 - py * 40, SHOULDER.x - px * 38, SHOULDER.y - py * 38);
+    ctx.closePath();
+    const sg = ctx.createLinearGradient(cuff.x + px * 50, cuff.y + py * 50, cuff.x - px * 46, cuff.y - py * 46);
+    sg.addColorStop(0, '#24180f'); sg.addColorStop(.5, '#53392a'); sg.addColorStop(1, '#2a1c12');
+    ctx.fillStyle = sg; ctx.fill();
+    // складки рукава
+    ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 4;
+    for (const f of [.45, .7]) {
+      const bx = SHOULDER.x + (cuff.x - SHOULDER.x) * f, by = SHOULDER.y + (cuff.y - SHOULDER.y) * f;
+      ctx.beginPath(); ctx.moveTo(bx + px * 30, by + py * 30); ctx.quadraticCurveTo(bx + dx * 14, by + dy * 14, bx - px * 28, by - py * 28); ctx.stroke();
+    }
+    // отвір рукава — темний
+    ctx.fillStyle = '#0d0907';
+    ctx.beginPath(); ctx.ellipse(cuff.x, cuff.y, 46, 16, Math.atan2(py, px), 0, Math.PI * 2); ctx.fill();
+    // передпліччя в рукавиці
+    ctx.strokeStyle = '#1c1c1c'; ctx.lineWidth = 26; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(cuff.x, cuff.y); ctx.lineTo(wrist.x, wrist.y); ctx.stroke();
+    if (light > 0) {
+      ctx.save(); ctx.globalAlpha = Math.min(1, light) * .7; ctx.strokeStyle = GREEN; ctx.lineWidth = 3;
+      ctx.shadowColor = GREEN; ctx.shadowBlur = 12;
+      ctx.beginPath(); ctx.moveTo(SHOULDER.x - px * 38, SHOULDER.y - py * 38); ctx.lineTo(cuff.x - px * 46, cuff.y - py * 46); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // ---- відкрита долоня (жест Сили): долоня від глядача, пальці розведені ----
+  function drawOpenHand(arm) {
     const { hand, a } = arm;
     ctx.save(); ctx.translate(hand.x, hand.y); ctx.rotate(a);
-    ctx.fillStyle = '#121212'; ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 2;
-    if (open) {
-      ctx.beginPath(); ctx.ellipse(0, 0, 20, 17, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.lineCap = 'round'; ctx.lineWidth = 8; ctx.strokeStyle = '#121212';
-      for (const f of [-.55, -.18, .18, .52]) {
-        ctx.beginPath(); ctx.moveTo(14 * Math.cos(f), 14 * Math.sin(f)); ctx.lineTo(34 * Math.cos(f * 1.25), 34 * Math.sin(f * 1.25)); ctx.stroke();
-      }
-      ctx.beginPath(); ctx.moveTo(0, -12); ctx.lineTo(12, -30); ctx.stroke();
-    } else {
-      ctx.beginPath(); ctx.ellipse(-2, 0, 19, 21, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#222'; ctx.strokeStyle = '#3a3a3a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(0, 0, 21, 19, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.lineCap = 'round';
+    const fingers = [[-.5, 30], [-.17, 36], [.16, 34], [.47, 27]];
+    for (const [ang, len] of fingers) {
+      ctx.strokeStyle = '#222'; ctx.lineWidth = 9;
+      ctx.beginPath(); ctx.moveTo(14 * Math.cos(ang), 14 * Math.sin(ang)); ctx.lineTo(len * Math.cos(ang * 1.3), len * Math.sin(ang * 1.3)); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(15 * Math.cos(ang), 15 * Math.sin(ang) - 2); ctx.lineTo((len - 3) * Math.cos(ang * 1.3), (len - 3) * Math.sin(ang * 1.3) - 2); ctx.stroke();
     }
+    ctx.strokeStyle = '#222'; ctx.lineWidth = 9;
+    ctx.beginPath(); ctx.moveTo(2, -14); ctx.lineTo(10, -32); ctx.stroke();                          // великий палець
     ctx.restore();
   }
 
-  // ---- руків'я (локально: вісь X — від навершя до емітера; рука на руків'ї в x=0) ----
-  const HS = 1.7;                                   // масштаб руків'я
-  function drawHilt() {
-    ctx.save(); ctx.scale(HS, HS);
-    const m = ctx.createLinearGradient(0, -9, 0, 9);
+  // ---- руків'я з кистю, що його обхоплює (локально: X — від навершя до емітера, кисть на x=0) ----
+  const HS = 1.7;
+  function drawHiltWithHand() {
+    const m = ctx.createLinearGradient(0, -9 * HS, 0, 9 * HS);
     m.addColorStop(0, '#5d6268'); m.addColorStop(.35, '#e1e6ea'); m.addColorStop(.6, '#9aa1a8'); m.addColorStop(1, '#3b3f44');
+    // тильна частина кисті — позаду руків'я
+    ctx.fillStyle = '#1e1e1e';
+    ctx.beginPath(); ctx.ellipse(-4, 0, 26, 24, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.save(); ctx.scale(HS, HS);
     ctx.fillStyle = '#1b1b1b'; ctx.fillRect(-36, -8, 8, 16);                 // навершя
     ctx.fillStyle = m; ctx.fillRect(-28, -7, 44, 14);                         // тіло
     ctx.fillStyle = '#111';
@@ -228,6 +299,16 @@
     ctx.fillStyle = m; ctx.fillRect(46, -10, 16, 20);                         // емітер
     ctx.fillStyle = '#222'; ctx.fillRect(58, -8, 4, 16);
     ctx.restore();
+    // пальці поверх руків'я — обхоплюють його
+    ctx.lineCap = 'round';
+    for (const x of [-16, -6, 4, 14]) {
+      ctx.strokeStyle = '#222'; ctx.lineWidth = 10;
+      ctx.beginPath(); ctx.moveTo(x, -15); ctx.quadraticCurveTo(x + 5, 0, x, 15); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,.13)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x - 2, -13); ctx.quadraticCurveTo(x + 2, 0, x - 2, 13); ctx.stroke();
+    }
+    ctx.strokeStyle = '#262626'; ctx.lineWidth = 10;                            // великий палець уздовж руків'я
+    ctx.beginPath(); ctx.moveTo(-20, 12); ctx.lineTo(4, 17); ctx.stroke();
   }
 
   // ---- лезо з кодом усередині ----
@@ -237,28 +318,24 @@
     const flick = .93 + .07 * hash(Math.floor(t * 30), 5, 5);
     ctx.save();
     ctx.lineCap = 'round';
-    for (const [w, al, col] of [[64, .08, '#1aff3c'], [38, .18, '#22ff3a'], [22, .9 * flick, '#39ff14']]) {
+    for (const [w, al, col] of [[64, .08, '#1aff3c'], [38, .18, '#22ff3a'], [22, .9 * flick, GREEN]]) {
       ctx.globalAlpha = al; ctx.strokeStyle = col; ctx.lineWidth = w;
-      ctx.shadowColor = '#39ff14'; ctx.shadowBlur = w === 22 ? 24 : 0;
+      ctx.shadowColor = GREEN; ctx.shadowBlur = w === 22 ? 24 : 0;
       ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
     }
     ctx.shadowBlur = 0;
-    // світле осердя
     ctx.globalAlpha = 1; ctx.strokeStyle = '#c9ffc2'; ctx.lineWidth = 14;
     ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
     // усередині біжать дрібні рядки коду (MSG 282)
     ctx.beginPath(); ctx.rect(x0, -7, len, 14); ctx.clip();
     ctx.font = `bold 5px ${FONT}`; ctx.textBaseline = 'middle';
-    const lanes = [-4.5, 0, 4.5];
-    lanes.forEach((y, i) => {
-      const sp = 90 + i * 35;
-      const step = CODE.length * 3.1;
-      const off = ((t * sp + i * 57) % step);
+    [-4.5, 0, 4.5].forEach((y, i) => {
+      const sp = 90 + i * 35, step = CODE.length * 3.1;
+      const off = (t * sp + i * 57) % step;
       ctx.globalAlpha = .9; ctx.fillStyle = i === 1 ? '#0a8f22' : '#10a82c';
       for (let x = x0 - step + off; x < x1; x += step) ctx.fillText(CODE, x, y);
     });
     ctx.restore();
-    // кінчик
     ctx.save(); ctx.globalAlpha = .9; ctx.fillStyle = '#e8ffe4';
     ctx.beginPath(); ctx.arc(x1, 0, 6, 0, Math.PI * 2); ctx.fill(); ctx.restore();
   }
@@ -303,32 +380,33 @@
     ctx.clearRect(0, 0, W, H);
     const sticker = MODE === 'sticker';
     if (sticker) t = STICKER_FROM + clamp(t, 0, STICKER_DUR);
-    if (!sticker) drawBackground();
 
     const xf = viewXf();
+    if (!sticker) drawBackground(xf);
     const arm = armAt(t);
     const handS = { x: xf.ox + arm.hand.x * xf.s, y: xf.oy + arm.hand.y * xf.s };
 
     const turnK = easeIO(seg(t, ...T.turn));
     const bladeK = easeOut(seg(t, ...T.blade));
-    const gather = seg(t, T.conv + .1, T.hilt) * (1 - seg(t, T.hilt, T.hilt + .6));  // код набирається в долоні, після появи руків'я гасне
+    const gather = seg(t, T.conv + .1, T.hilt) * (1 - seg(t, T.hilt, T.hilt + .6));
     const flash = seg(t, T.hilt - .05, T.hilt + .1) * (1 - seg(t, T.hilt + .1, T.hilt + .5));
     const light = Math.max(seg(t, T.conv + .1, T.hilt) * .6 * (1 - turnK), bladeK);
+    const toVirtual = () => ctx.setTransform(DPR * xf.s, 0, 0, DPR * xf.s, DPR * xf.ox, DPR * xf.oy);
 
-    // сцена (у віртуальних координатах)
-    ctx.save(); ctx.setTransform(DPR * xf.s, 0, 0, DPR * xf.s, DPR * xf.ox, DPR * xf.oy);
-    drawFigure(t, arm, light);
+    // сцена у віртуальних координатах
+    ctx.save(); toVirtual();
+    drawBody(light);
+    drawSleeve(arm, light);
     const hasHilt = t >= T.hilt;
     if (hasHilt) {
-      ctx.save(); ctx.translate(arm.hand.x, arm.hand.y); ctx.rotate(lerp(0, -Math.PI / 2, turnK));
+      ctx.save(); ctx.translate(arm.hand.x, arm.hand.y); ctx.rotate(lerp(0, -Math.PI / 2, turnK));   // горизонтально → вертикально
       drawBlade(t, 400 * bladeK);
-      drawHilt();
+      drawHiltWithHand();
       ctx.restore();
-    }
-    drawHand(arm, !hasHilt);
+    } else drawOpenHand(arm);
     ctx.restore();
 
-    // зелене світло від леза на всю сцену
+    // зелене світло від леза на сцену
     if (bladeK > 0) {
       const bx = handS.x, by = handS.y - 200 * xf.s * bladeK;
       const g = ctx.createRadialGradient(bx, by, 0, bx, by, 520 * xf.s);
@@ -344,6 +422,9 @@
       drawRain(t, handS);
     }
 
+    // код у каптурі — поверх затемнення (MSG 292, зауваження 4)
+    ctx.save(); toVirtual(); hoodCode(t, hoodK(t)); ctx.restore();
+
     // сяйво коду в долоні + спалах появи руків'я
     const glow = Math.max(gather * .8, flash);
     if (glow > 0) {
@@ -354,7 +435,13 @@
       ctx.fillRect(handS.x - r, handS.y - r, 2 * r, 2 * r); ctx.restore();
     }
 
-    if (!sticker) {
+    if (sticker) {
+      // низ фігури плавно розчиняється — обріз не видно (зауваження 1)
+      const y0 = H * .72;
+      const g = ctx.createLinearGradient(0, y0, 0, H);
+      g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,1)');
+      ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = g; ctx.fillRect(0, y0, W, H - y0); ctx.restore();
+    } else {
       const dark = Math.max(1 - seg(t, ...T.figIn), seg(t, ...T.out));
       if (dark > 0) { ctx.globalAlpha = dark; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
     }
@@ -366,23 +453,25 @@
   if (MODE !== 'live') return;
 
   const btn = document.getElementById('replay');
-  let tg = null;
+  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let tg = null, started = false;
+  const finish = () => {
+    if (tg && tg.initData) setTimeout(() => { try { tg.close(); } catch (e) {} }, 300);   // у Telegram — закриваємось самі
+    else btn.style.display = 'block';
+  };
   function play() {
     btn.style.display = 'none';
+    if (reduced) { draw(7.0); setTimeout(finish, 2500); return; }    // без руху: один кадр із мечем
     const t0 = performance.now();
     (function frame(now) {
       const t = (now - t0) / 1000;
       draw(Math.min(t, DUR));
-      if (t < DUR) requestAnimationFrame(frame);
-      else if (tg && tg.initData) setTimeout(() => tg.close(), 300);   // у Telegram — закриваємось самі
-      else btn.style.display = 'block';
+      if (t < DUR) requestAnimationFrame(frame); else finish();
     })(t0);
   }
-  btn.addEventListener('click', play);
-
-  const s = document.createElement('script');
-  s.src = 'https://telegram.org/js/telegram-web-app.js';
-  s.onload = s.onerror = () => {
+  function start() {
+    if (started) return;
+    started = true;
     tg = window.Telegram && window.Telegram.WebApp;
     if (tg) {
       try { tg.ready(); tg.expand(); } catch (e) {}
@@ -391,8 +480,14 @@
       try { if (tg.requestFullscreen && tg.isVersionAtLeast && tg.isVersionAtLeast('8.0')) tg.requestFullscreen(); } catch (e) {}
     }
     setTimeout(play, 250);
-  };
+  }
+  btn.addEventListener('click', play);
+
+  const s = document.createElement('script');
+  s.src = 'https://telegram.org/js/telegram-web-app.js';
+  s.onload = s.onerror = start;
   document.head.appendChild(s);
+  setTimeout(start, 1500);    // запасний старт: скрипт Telegram не відповів — граємо все одно (зауваження 9)
 })();
 </script>
 </body>
